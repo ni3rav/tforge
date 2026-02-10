@@ -20,7 +20,7 @@ import (
 
 func Main() {
 	if err := Run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		cli.Error(os.Stderr, "%v", err)
 		os.Exit(1)
 	}
 }
@@ -61,12 +61,12 @@ func runCapture(ctx context.Context, args []string, in io.Reader, out io.Writer)
 	if *sessionName == "" {
 		detected, err := service.DetectCurrentSession(ctx)
 		if err == nil && detected != "" {
-			fmt.Fprintf(out, "Current tmux session detected: %s\n", detected)
+			cli.Info(out, "Current tmux session detected: %s", detected)
 			*sessionName = detected
 		} else {
 			available, listErr := service.ListSessions(ctx)
 			if listErr == nil && len(available) > 0 {
-				fmt.Fprintf(out, "Available tmux sessions: %s\n", strings.Join(available, ", "))
+				cli.Info(out, "Available tmux sessions: %s", strings.Join(available, ", "))
 			}
 			v, pErr := prompt.Ask("Session name to capture")
 			if pErr != nil {
@@ -100,7 +100,7 @@ func runCapture(ctx context.Context, args []string, in io.Reader, out io.Writer)
 	if err != nil {
 		return err
 	}
-	scriptPath := filepath.Join(home, ".tmux", "sessions", *saveName+".sh")
+	scriptPath := filepath.Join(home, ".tforge", "sessions", *saveName+".sh")
 	content, err := generate.Script(snap)
 	if err != nil {
 		return err
@@ -108,7 +108,7 @@ func runCapture(ctx context.Context, args []string, in io.Reader, out io.Writer)
 	if err := fsutil.WriteExecutable(scriptPath, []byte(content)); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Wrote script: %s\n", scriptPath)
+	cli.Info(out, "Wrote script: %s", scriptPath)
 
 	if !*noBind {
 		if *bindKey == "" {
@@ -119,7 +119,7 @@ func runCapture(ctx context.Context, args []string, in io.Reader, out io.Writer)
 			*bindKey = v
 		}
 		if warning := config.CommonKeyWarning(*bindKey); warning != "" {
-			fmt.Fprintf(out, "Warning: %s\n", warning)
+			cli.Warn(out, "%s", warning)
 		}
 		tmuxConf := filepath.Join(home, ".tmux.conf")
 		updated, changed, err := config.UpdateFile(tmuxConf, *saveName, *bindKey, scriptPath)
@@ -127,34 +127,34 @@ func runCapture(ctx context.Context, args []string, in io.Reader, out io.Writer)
 			return err
 		}
 		if changed {
-			fmt.Fprintf(out, "Updated tmux config: %s\n", tmuxConf)
+			cli.Info(out, "Updated tmux config: %s", tmuxConf)
 		} else {
-			fmt.Fprintf(out, "Tmux config already up-to-date: %s\n", tmuxConf)
+			cli.Info(out, "Tmux config already up-to-date: %s", tmuxConf)
 		}
 		if updated {
 			if err := service.ReloadConfig(ctx, tmuxConf); err != nil {
-				fmt.Fprintf(out, "Warning: unable to reload tmux config automatically: %v\n", err)
+				cli.Warn(out, "unable to reload tmux config automatically: %v", err)
 			} else {
-				fmt.Fprintln(out, "Reloaded tmux config.")
+				cli.Info(out, "Reloaded tmux config.")
 			}
 		}
-		fmt.Fprintf(out, "Bound key: prefix + %s\n", *bindKey)
+		cli.Info(out, "Bound key: prefix + %s", *bindKey)
 	}
 
-	fmt.Fprintln(out, "Done.")
+	cli.Info(out, "Done.")
 	return nil
 }
 
 func printHelp(out io.Writer) {
-	fmt.Fprint(out, `tforge (tf) - capture tmux layouts into reusable scripts
+	fmt.Fprint(out, `tforge - capture tmux layouts into reusable scripts
 
 Usage:
   tforge capture [flags]
 
-Commands:
+Command:
   capture     Capture a tmux session and generate a reusable script
 
-Flags (capture):
+Flags:
   --session <name>   tmux session name to capture
   --name <name>      output script name (default: same as session)
   --key <key>        bind key (prefix + key)

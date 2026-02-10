@@ -6,27 +6,29 @@
 
 - Capture a tmux session by name.
 - Record windows, pane paths, pane counts, layout strings, and active window/pane.
-- Generate idempotent scripts in `~/.tmux/sessions/<name>.sh`.
+- Generate idempotent scripts in `~/.tforge/sessions/<name>.sh`.
 - Safely update `~/.tmux.conf` with an `unbind-key` + `bind-key` block.
 - Reload tmux config automatically when possible.
 - Supports interactive prompts and CLI flags.
-- Includes both `tforge` and shorthand `tf` binaries.
+- Uses a single `tforge` binary; `tf` can be a symlink to that same binary.
 
 ## Install
 
 ```bash
 go build -o tforge ./cmd/tforge
-go build -o tf ./cmd/tf
 ```
 
 Place the binaries in your `PATH`, for example:
 
 ```bash
 install -m 755 tforge /usr/local/bin/tforge
-install -m 755 tf /usr/local/bin/tf
+ln -sf /usr/local/bin/tforge /usr/local/bin/tf
 ```
 
 ## Usage
+
+`tforge` and `tf` are interoperable via one binary: `tf` should point to `tforge` (symlink).
+
 
 ```bash
 tf capture
@@ -51,7 +53,7 @@ When keybinding is enabled, `tforge` updates `~/.tmux.conf` by writing a managed
 ```tmux
 # tforge begin: hive
 unbind-key g
-bind-key g run-shell "/usr/bin/env bash /home/you/.tmux/sessions/hive.sh"
+bind-key g run-shell "/usr/bin/env bash /home/you/.tforge/sessions/hive.sh"
 # tforge end: hive
 ```
 
