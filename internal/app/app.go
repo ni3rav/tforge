@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"tforge/internal/cli"
 	"tforge/internal/config"
 	"tforge/internal/fsutil"
 	"tforge/internal/generate"
+	"tforge/internal/journal"
 	"tforge/internal/snapshot"
 	"tforge/internal/tmux"
 )
@@ -36,6 +39,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out io.Writer, _ io.W
 		return nil
 	case "capture":
 		return runCapture(ctx, args[1:], in, out)
+	case "restore":
+		return runRestore(ctx, args[1:], in, out)
 	default:
 		return usageError(out, fmt.Sprintf("unknown command %q", args[0]))
 	}
@@ -47,7 +52,7 @@ func runCapture(ctx context.Context, args []string, in io.Reader, out io.Writer)
 
 	sessionName := fs.String("session", "", "tmux session name to capture")
 	saveName := fs.String("name", "", "name to save generated script as")
-	bindKey := fs.String("key", "", "tmux key to bind (prefix + key)")
+	bindKey := fs.String("key", "", "tmux key to bind (prefix + key), empty to skip")
 	noBind := fs.Bool("no-bind", false, "do not modify ~/.tmux.conf")
 
 	if err := fs.Parse(args); err != nil {
@@ -59,21 +64,14 @@ func runCapture(ctx context.Context, args []string, in io.Reader, out io.Writer)
 	prompt := cli.NewPrompter(in, out)
 
 	if *sessionName == "" {
-		detected, err := service.DetectCurrentSession(ctx)
-		if err == nil && detected != "" {
-			cli.Info(out, "Current tmux session detected: %s", detected)
-			*sessionName = detected
-		} else {
-			available, listErr := service.ListSessions(ctx)
-			if listErr == nil && len(available) > 0 {
-				cli.Info(out, "Available tmux sessions: %s", strings.Join(available, ", "))
-			}
-			v, pErr := prompt.Ask("Session name to capture")
-			if pErr != nil {
-				return pErr
-			}
-			*sessionName = v
+		s, ok, err := selectTmuxSession(ctx, service, prompt, out)
+		if err != nil {
+			return err
 		}
+		if !ok {
+			return errors.New("capture cancelled")
+		}
+		*sessionName = s
 	}
 
 	if exists, err := service.SessionExists(ctx, *sessionName); err != nil {
@@ -110,39 +108,153 @@ func runCapture(ctx context.Context, args []string, in io.Reader, out io.Writer)
 	}
 	cli.Info(out, "Wrote script: %s", scriptPath)
 
+	if err := updateJournal(home, snap, scriptPath); err != nil {
+		cli.Warn(out, "unable to update journal: %v", err)
+	}
+
 	if !*noBind {
 		if *bindKey == "" {
-			v, err := prompt.Ask("Bind to key (prefix + key)")
+			wantsBind, err := prompt.AskYesNo("Add tmux keybinding", false)
 			if err != nil {
 				return err
 			}
-			*bindKey = v
-		}
-		if warning := config.CommonKeyWarning(*bindKey); warning != "" {
-			cli.Warn(out, "%s", warning)
-		}
-		tmuxConf := filepath.Join(home, ".tmux.conf")
-		updated, changed, err := config.UpdateFile(tmuxConf, *saveName, *bindKey, scriptPath)
-		if err != nil {
-			return err
-		}
-		if changed {
-			cli.Info(out, "Updated tmux config: %s", tmuxConf)
-		} else {
-			cli.Info(out, "Tmux config already up-to-date: %s", tmuxConf)
-		}
-		if updated {
-			if err := service.ReloadConfig(ctx, tmuxConf); err != nil {
-				cli.Warn(out, "unable to reload tmux config automatically: %v", err)
-			} else {
-				cli.Info(out, "Reloaded tmux config.")
+			if wantsBind {
+				v, err := prompt.Ask("Bind to key (prefix + key)")
+				if err != nil {
+					return err
+				}
+				*bindKey = v
 			}
 		}
-		cli.Info(out, "Bound key: prefix + %s", *bindKey)
+		if strings.TrimSpace(*bindKey) != "" {
+			if warning := config.CommonKeyWarning(*bindKey); warning != "" {
+				cli.Warn(out, "%s", warning)
+			}
+			tmuxConf := filepath.Join(home, ".tmux.conf")
+			updated, changed, err := config.UpdateFile(tmuxConf, *saveName, *bindKey, scriptPath)
+			if err != nil {
+				return err
+			}
+			if changed {
+				cli.Info(out, "Updated tmux config: %s", tmuxConf)
+			} else {
+				cli.Info(out, "Tmux config already up-to-date: %s", tmuxConf)
+			}
+			if updated {
+				if err := service.ReloadConfig(ctx, tmuxConf); err != nil {
+					cli.Warn(out, "unable to reload tmux config automatically: %v", err)
+				} else {
+					cli.Info(out, "Reloaded tmux config.")
+				}
+			}
+			cli.Info(out, "Bound key: prefix + %s", *bindKey)
+		} else {
+			cli.Info(out, "Keybinding skipped.")
+		}
 	}
 
 	cli.Info(out, "Done.")
 	return nil
+}
+
+func runRestore(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	fs.SetOutput(out)
+	sessionName := fs.String("session", "", "session name from journal")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	jPath := journal.Path(home)
+	data, err := journal.Load(jPath)
+	if err != nil {
+		return err
+	}
+	if len(data.Entries) == 0 {
+		return errors.New("no saved sessions found; run 'tforge capture' first")
+	}
+
+	prompt := cli.NewPrompter(in, out)
+	if *sessionName == "" {
+		opts := make([]cli.Option, 0, len(data.Entries))
+		for _, e := range data.Entries {
+			opts = append(opts, cli.Option{
+				ID:      e.Session,
+				Label:   e.Session,
+				Details: fmt.Sprintf("windows=%d panes=%d captured=%s", e.Windows, e.Panes, e.CapturedAt.Format(time.RFC3339)),
+			})
+		}
+		sel, ok, err := cli.SelectFuzzy(prompt, out, "Select a saved session to restore", opts)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("restore cancelled")
+		}
+		*sessionName = sel
+	}
+
+	var entry *journal.Entry
+	for i := range data.Entries {
+		if data.Entries[i].Session == *sessionName {
+			entry = &data.Entries[i]
+			break
+		}
+	}
+	if entry == nil {
+		return fmt.Errorf("session %q is not in journal %s", *sessionName, jPath)
+	}
+	cli.Info(out, "Restoring %s (windows=%d, panes=%d)", entry.Session, entry.Windows, entry.Panes)
+
+	cmd := exec.CommandContext(ctx, "/usr/bin/env", "bash", entry.ScriptPath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("restore script failed: %w", err)
+	}
+	return nil
+}
+
+func updateJournal(home string, snap snapshot.Session, scriptPath string) error {
+	path := journal.Path(home)
+	data, err := journal.Load(path)
+	if err != nil {
+		return err
+	}
+	panes := 0
+	for _, w := range snap.Windows {
+		panes += len(w.Panes)
+	}
+	data = journal.Upsert(data, journal.Entry{
+		Session:    snap.Name,
+		ScriptPath: scriptPath,
+		Windows:    len(snap.Windows),
+		Panes:      panes,
+		CapturedAt: time.Now().UTC(),
+	})
+	return journal.Save(path, data)
+}
+
+func selectTmuxSession(ctx context.Context, service *tmux.Service, prompt *cli.Prompter, out io.Writer) (string, bool, error) {
+	detected, err := service.DetectCurrentSession(ctx)
+	if err == nil && detected != "" {
+		cli.Info(out, "Current tmux session detected: %s", detected)
+		return detected, true, nil
+	}
+	sessions, err := service.ListSessions(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	options := make([]cli.Option, 0, len(sessions))
+	for _, s := range sessions {
+		options = append(options, cli.Option{ID: s, Label: s})
+	}
+	return cli.SelectFuzzy(prompt, out, "Select tmux session to capture", options)
 }
 
 func printHelp(out io.Writer) {
@@ -150,20 +262,25 @@ func printHelp(out io.Writer) {
 
 Usage:
   tforge capture [flags]
+  tforge restore [flags]
 
-Command:
+Commands:
   capture     Capture a tmux session and generate a reusable script
+  restore     Restore a captured session from ~/.tforge/journal.json
 
-Flags:
+Flags (capture):
   --session <name>   tmux session name to capture
   --name <name>      output script name (default: same as session)
-  --key <key>        bind key (prefix + key)
+  --key <key>        bind key (prefix + key), empty to skip
   --no-bind          skip updating ~/.tmux.conf
+
+Flags (restore):
+  --session <name>   restore a specific saved session (else fuzzy select)
 
 Examples:
   tf capture
   tforge capture --session hive --name hive --key g
-  tforge capture --session dev --no-bind
+  tforge restore
 `)
 }
 

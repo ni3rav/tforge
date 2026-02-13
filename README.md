@@ -1,54 +1,69 @@
 # tforge
 
-`tforge` is a Go CLI that captures a live tmux session layout and generates a reusable shell script that can recreate it on demand. It can also add a tmux key binding so your layout can be restored with `prefix + <key>`.
+`tforge` is a Go CLI that captures a live tmux session and turns it into a reusable restore script.
 
 ## Features
 
-- Capture a tmux session by name.
-- Record windows, pane paths, pane counts, layout strings, and active window/pane.
-- Generate idempotent scripts in `~/.tforge/sessions/<name>.sh`.
-- Safely update `~/.tmux.conf` with an `unbind-key` + `bind-key` block.
-- Reload tmux config automatically when possible.
-- Supports interactive prompts and CLI flags.
-- Uses a single `tforge` binary; `tf` can be a symlink to that same binary.
+- Capture tmux sessions with fuzzy selection (with cancel/exit option).
+- Save scripts to `~/.tforge/sessions/<name>.sh`.
+- Optional keybinding (you can skip binding during capture).
+- Restore sessions via `tforge restore` using fuzzy selection + details.
+- Keeps metadata in `~/.tforge/journal.json` (session name, script path, windows, panes, capture time).
+- If restore script is run against a fresh 1-window/1-pane session with the same name, it overrides that session and rebuilds layout.
 
 ## Install
 
+Build both commands directly (no symlink needed):
+
 ```bash
 go build -o tforge ./cmd/tforge
+go build -o tf ./cmd/tf
 ```
 
-Place the binaries in your `PATH`, for example:
+Install:
 
 ```bash
 install -m 755 tforge /usr/local/bin/tforge
-ln -sf /usr/local/bin/tforge /usr/local/bin/tf
+install -m 755 tf /usr/local/bin/tf
 ```
 
 ## Usage
 
-`tforge` and `tf` are interoperable via one binary: `tf` should point to `tforge` (symlink).
-
+Capture interactively:
 
 ```bash
 tf capture
 ```
 
-Flag-based usage:
+Capture with flags:
 
 ```bash
 tforge capture --session hive --name hive --key g
 ```
 
-Skip tmux config update:
+Capture but skip keybinding:
 
 ```bash
 tforge capture --session hive --no-bind
 ```
 
-## How keybinding works
+In the interactive wizard, you can also skip keybinding by answering `n` when asked `Add tmux keybinding [y/N]`.
 
-When keybinding is enabled, `tforge` updates `~/.tmux.conf` by writing a managed block:
+Restore interactively from journal:
+
+```bash
+tforge restore
+```
+
+Restore by name:
+
+```bash
+tforge restore --session hive
+```
+
+## Keybinding behavior
+
+When binding is enabled, `tforge` writes a managed block in `~/.tmux.conf`:
 
 ```tmux
 # tforge begin: hive
@@ -57,32 +72,13 @@ bind-key g run-shell "/usr/bin/env bash /home/you/.tforge/sessions/hive.sh"
 # tforge end: hive
 ```
 
-This ensures the selected key is unbound first and avoids duplicated managed blocks for the same saved session.
-
-## Generated script behavior
-
-Generated scripts are idempotent:
-
-- If the session already exists:
-  - inside tmux: `switch-client`
-  - outside tmux: `attach-session`
-- If the session does not exist:
-  - create session + windows + panes
-  - restore each window layout
-  - restore active pane/window
-  - attach/switch appropriately
-
-Scripts are plain shell and can be edited manually after generation.
-
 ## Development checks
-
-Run full local verification:
 
 ```bash
 make check
 ```
 
-Or run manually:
+Manual checks:
 
 ```bash
 go test -count=1 ./...
@@ -95,5 +91,3 @@ go vet ./...
 ```bash
 tforge --help
 ```
-
-Shows command and flag documentation.

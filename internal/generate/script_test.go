@@ -23,7 +23,7 @@ func TestScriptIncludesIdempotentAttachFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checks := []string{"tmux has-session -t \"$SESSION\"", "tmux switch-client -t \"$SESSION\"", "tmux attach-session -t \"$SESSION\"", "tmux new-session -d -s \"hive\" -n \"editor\" -c \"/workspace\""}
+	checks := []string{"tmux has-session -t \"$SESSION\"", "tmux switch-client -t \"$SESSION\"", "tmux attach-session -t \"$SESSION\"", "tmux new-session -d -s \"hive\" -n \"editor\" -c \"/workspace\"", "tmux kill-session -t \"$SESSION\""}
 	for _, c := range checks {
 		if !strings.Contains(out, c) {
 			t.Fatalf("expected generated script to contain %q", c)
