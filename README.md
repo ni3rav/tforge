@@ -6,6 +6,7 @@
 
 - Single binary build (`tforge`) that can be invoked as `tforge` or `tf`.
 - Interactive arrow-key fuzzy selector for capture/restore (`↑/↓`, type to filter, Enter to select, `q` to cancel).
+- Automatic fallback to a numbered selector when interactive TTY controls are unavailable.
 - Save scripts to `~/.tforge/sessions/<name>.sh`.
 - Optional keybinding during wizard (skip with `n`) or via `--no-bind`.
 - Restore sessions via `tforge restore` with session details (`windows`, `panes`, capture timestamp).

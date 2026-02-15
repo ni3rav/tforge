@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -14,24 +15,27 @@ type Option struct {
 	Details string
 }
 
-func SelectFuzzy(_ *Prompter, _ io.Writer, title string, options []Option) (string, bool, error) {
+// SelectFuzzy tries an interactive arrow-key selector when a TTY is available.
+// If TTY interaction is unavailable, it falls back to a numbered prompt selector.
+func SelectFuzzy(p *Prompter, out io.Writer, title string, options []Option) (string, bool, error) {
 	if len(options) == 0 {
 		return "", false, nil
 	}
 
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
-		return "", false, err
+		return selectFallback(p, out, title, options)
 	}
 	defer tty.Close()
 
-	state, err := sttyState()
+	state, err := sttyState(tty)
 	if err != nil {
-		return "", false, err
+		return selectFallback(p, out, title, options)
 	}
-	defer restoreTTY(state)
-	if err := exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "0").Run(); err != nil {
-		return "", false, err
+	defer restoreTTY(tty, state)
+
+	if err := setRawTTY(tty); err != nil {
+		return selectFallback(p, out, title, options)
 	}
 
 	all := append([]Option{{ID: "", Label: "Exit", Details: "Cancel"}}, options...)
@@ -86,6 +90,34 @@ func SelectFuzzy(_ *Prompter, _ io.Writer, title string, options []Option) (stri
 	}
 }
 
+func selectFallback(p *Prompter, out io.Writer, title string, options []Option) (string, bool, error) {
+	fmt.Fprintf(out, "\n%s\n", title)
+	fmt.Fprintln(out, "(fallback mode: type a number, or q to cancel)")
+	for i, opt := range options {
+		if strings.TrimSpace(opt.Details) == "" {
+			fmt.Fprintf(out, "  %d) %s\n", i+1, opt.Label)
+		} else {
+			fmt.Fprintf(out, "  %d) %s (%s)\n", i+1, opt.Label, opt.Details)
+		}
+	}
+	for {
+		in, err := p.AskAllowEmpty("Select number (q to cancel)")
+		if err != nil {
+			return "", false, err
+		}
+		in = strings.TrimSpace(strings.ToLower(in))
+		if in == "q" || in == "exit" {
+			return "", false, nil
+		}
+		idx, err := strconv.Atoi(in)
+		if err != nil || idx < 1 || idx > len(options) {
+			fmt.Fprintln(out, "Invalid selection.")
+			continue
+		}
+		return options[idx-1].ID, true, nil
+	}
+}
+
 func renderSelect(tty *os.File, title, query string, options []Option, selected int) {
 	fmt.Fprint(tty, "\033[H\033[2J")
 	fmt.Fprintf(tty, "%s\n", title)
@@ -125,8 +157,17 @@ func filterOptions(options []Option, query string) []Option {
 	return out
 }
 
-func sttyState() (string, error) {
+func setRawTTY(tty *os.File) error {
+	cmd := exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "0")
+	cmd.Stdin = tty
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
+}
+
+func sttyState(tty *os.File) (string, error) {
 	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = tty
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -134,9 +175,13 @@ func sttyState() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func restoreTTY(state string) {
+func restoreTTY(tty *os.File, state string) {
 	if state == "" {
 		return
 	}
-	_ = exec.Command("stty", state).Run()
+	cmd := exec.Command("stty", state)
+	cmd.Stdin = tty
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	_ = cmd.Run()
 }
