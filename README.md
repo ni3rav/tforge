@@ -1,31 +1,33 @@
 # tforge
 
-`tforge` is a Go CLI that captures a live tmux session and turns it into a reusable restore script.
+`tforge` is a lightweight Go CLI that captures a live tmux session and turns it into a reusable restore script.
 
 ## Features
 
-- Capture tmux sessions with fuzzy selection (with cancel/exit option).
+- Single binary build (`tforge`) that can be invoked as `tforge` or `tf`.
+- Interactive arrow-key fuzzy selector for capture/restore (`↑/↓`, type to filter, Enter to select, `q` to cancel).
 - Save scripts to `~/.tforge/sessions/<name>.sh`.
-- Optional keybinding (you can skip binding during capture).
-- Restore sessions via `tforge restore` using fuzzy selection + details.
-- Keeps metadata in `~/.tforge/journal.json` (session name, script path, windows, panes, capture time).
-- If restore script is run against a fresh 1-window/1-pane session with the same name, it overrides that session and rebuilds layout.
+- Optional keybinding during wizard (skip with `n`) or via `--no-bind`.
+- Restore sessions via `tforge restore` with session details (`windows`, `panes`, capture timestamp).
+- Journal metadata in `~/.tforge/journal.json`.
+- Fresh-session override: if same-name session is only 1 window + 1 pane, restore script replaces it with saved layout.
 
 ## Install
 
-Build both commands directly (no symlink needed):
+Build once:
 
 ```bash
 go build -o tforge ./cmd/tforge
-go build -o tf ./cmd/tf
 ```
 
-Install:
+Install the same binary for both command names:
 
 ```bash
 install -m 755 tforge /usr/local/bin/tforge
-install -m 755 tf /usr/local/bin/tf
+ln -f /usr/local/bin/tforge /usr/local/bin/tf
 ```
+
+> `tf` and `tforge` now point to the same built binary (single build artifact).
 
 ## Usage
 
@@ -41,15 +43,17 @@ Capture with flags:
 tforge capture --session hive --name hive --key g
 ```
 
-Capture but skip keybinding:
+Skip keybinding:
 
 ```bash
 tforge capture --session hive --no-bind
 ```
 
-In the interactive wizard, you can also skip keybinding by answering `n` when asked `Add tmux keybinding [y/N]`.
+Interactive wizard skip:
 
-Restore interactively from journal:
+- answer `n` to `Add tmux keybinding [y/N]`
+
+Restore interactively:
 
 ```bash
 tforge restore
@@ -59,17 +63,6 @@ Restore by name:
 
 ```bash
 tforge restore --session hive
-```
-
-## Keybinding behavior
-
-When binding is enabled, `tforge` writes a managed block in `~/.tmux.conf`:
-
-```tmux
-# tforge begin: hive
-unbind-key g
-bind-key g run-shell "/usr/bin/env bash /home/you/.tforge/sessions/hive.sh"
-# tforge end: hive
 ```
 
 ## Development checks

@@ -258,11 +258,15 @@ func selectTmuxSession(ctx context.Context, service *tmux.Service, prompt *cli.P
 }
 
 func printHelp(out io.Writer) {
-	fmt.Fprint(out, `tforge - capture tmux layouts into reusable scripts
+	cmd := filepath.Base(os.Args[0])
+	if cmd == "" {
+		cmd = "tforge"
+	}
+	fmt.Fprintf(out, `%s - capture tmux layouts into reusable scripts
 
 Usage:
-  tforge capture [flags]
-  tforge restore [flags]
+  %s capture [flags]
+  %s restore [flags]
 
 Commands:
   capture     Capture a tmux session and generate a reusable script
@@ -281,7 +285,7 @@ Examples:
   tf capture
   tforge capture --session hive --name hive --key g
   tforge restore
-`)
+`, cmd, cmd, cmd)
 }
 
 func usageError(out io.Writer, msg string) error {
